@@ -88,7 +88,7 @@ def create_authors_csv_object(authors, cur):
         get_nested_json_field("public_metrics", "following_count", author),
         get_nested_json_field("public_metrics", "tweet_count", author),
         get_nested_json_field("public_metrics", "listed_count", author)
-    ) for author in authors])
+    ) for author in authors], page_size=1000)
 
 
 if __name__ == "__main__":
@@ -109,9 +109,12 @@ if __name__ == "__main__":
             author['description'] = replace_null_chars(author['description'])
             authors.append(author)
 
-            if x % 1000000 == 0:
+            if x % 10000 == 0:
                 print(x)
-                create_authors_csv_object(authors, cur)
+                create_authors_csv_object(iter(authors), cur)
+
+                authors = []
+        create_authors_csv_object(authors, cur)
 
             # author["username"] = author["username"][:22]
     # with gzip.open('conversations.jsonl.gz', 'rt') as f:
