@@ -1,160 +1,133 @@
 import gzip
+import io
 import json
 import time
+from typing import Optional, Any
 
-import psycopg2
 import orjson
+import psycopg2.extras
+
+from db_management import connect, create_tables
+i = 0
+csv_file_like_object = io.StringIO()
+csv_file_like_object2 = io.StringIO()
 
 
-def connect():
-    """ Connect to the PostgreSQL database server """
-    try:
-        # connect to the PostgreSQL server
-        print('Connecting to the PostgreSQL database...')
-        conn = psycopg2.connect(
-            host="localhost",
-            database="PDT-Z1",
-            user="postgres",
-            password="1234")
-        return conn
-    except (Exception, psycopg2.DatabaseError) as error:
-        print(error)
+def replace_null_chars(str):
+    return str.replace("\x00", "\uFFFD")
 
 
-def create_tables(cur):
-    cur.execute("""
-           DROP TABLE IF EXISTS authors CASCADE; 
-           CREATE UNLOGGED TABLE authors (
-               id                  int8 PRIMARY KEY,
-               name                varchar(255),
-               username            varchar(255),
-               description         text,
-               followers_count     int4,
-               following_count     int4,
-               tweet_count         int4,
-               listed_count        int4
-           );
-           COMMIT;
-       """)
+def get_json_field(key, record):
+    if key in record:
+        return record[key]
 
-    cur.execute("""
-           DROP TABLE IF EXISTS conversations CASCADE;
-           CREATE UNLOGGED TABLE conversations (
-               id                  int8 PRIMARY KEY UNIQUE, 
-               author_id           int8 references authors(id),
-               content             text,
-               possibly_sensitive  bool,
-               language            varchar(3),
-               source              text,
-               retweet_count       int4,
-               reply_count         int4,
-               like_count          int4,
-               quote_count         int4,
-               created_at          timestamptz
-           );
-           COMMIT;
-       """)
+def get_nested_json_field(key1, key2, record):
+    if key1 in record:
+        if key2 in record[key1]:
+            return record[key1][key2]
 
-    cur.execute("""
-           DROP TABLE IF EXISTS hashtags CASCADE;
-           CREATE UNLOGGED TABLE hashtags (
-               id                  int8 PRIMARY KEY,
-               tag                 text UNIQUE
-           );
-           COMMIT;
-       """)
+def clean_csv_value(value: Optional[Any]) -> str:
+    if value is None:
+        return r'\N'
+    return str(value).replace('\n', '\\n')
 
-    cur.execute("""
-           DROP TABLE IF EXISTS conversation_hashtags;
-           CREATE UNLOGGED TABLE conversation_hashtags (
-               id                  int8 PRIMARY KEY,
-               conversation_id     int8 references conversations(id),
-               hashtag_id          int8 references hashtags(id)
-           );
-           COMMIT;
-       """)
 
-    cur.execute("""
-           DROP TABLE IF EXISTS context_domains CASCADE;
-           CREATE UNLOGGED TABLE context_domains (
-               id                  int8 PRIMARY KEY,
-               name                varchar(255),
-               description         varchar(255)
-           );
-           COMMIT;
-       """)
 
-    cur.execute("""
-           DROP TABLE IF EXISTS context_entities CASCADE;
-           CREATE UNLOGGED TABLE context_entities (
-               id                  int8 PRIMARY KEY,
-               name                varchar(255),
-               description         varchar(255)
-           );
-           COMMIT;
-       """)
+domain_ids = {''}
+entity_ids = {''}
 
-    cur.execute("""
-           DROP TABLE IF EXISTS context_annotations;
-           CREATE UNLOGGED TABLE context_annotations (
-               id                  int8 PRIMARY KEY,
-               conversation_id     int8 references conversations(id),
-               context_domains_id  int8 references context_domains(id),
-               context_entity      int8 references context_entities(id)
-           );
-           COMMIT;
-       """)
 
-    cur.execute("""
-           DROP TABLE IF EXISTS annotations CASCADE;
-           CREATE UNLOGGED TABLE annotations (
-               id                  int8 PRIMARY KEY,
-               conversation_id     int8 references conversations(id),
-               value               text,
-               type                text,
-               probability         numeric(4,3)
-           );
-           COMMIT;
-       """)
+def create_context_annotations_csv_objects(record, cur):
+    if "context_annotations" in record:
+        for cann in record["context_annotations"]:
+            domain = get_json_field("domain", cann)
+            entity = get_json_field("entity", cann)
+            # insert into context_domains
+            global csv_file_like_object
+            if domain['id'] not in domain_ids:
+                csv_file_like_object.write('|'.join(map(clean_csv_value, (
+                    domain['id'],
+                    get_json_field("name", domain),
+                    get_json_field("description", domain)
+                ))) + '\n')
+                domain_ids.add(domain['id'])
+            # insert into context_entities
+            # if entity['id'] not in entity_ids:
+            #     csv_file_like_object2.write('|'.join(map(clean_csv_value, (
+            #         entity['id'],
+            #         get_json_field("name", entity),
+            #         get_json_field("description", entity)
+            #     ))) + '\n')
+            #     entity_ids.add(entity['id'])
+            # print(domain['id'])
+            # print(get_json_field("name", domain))
+            # print(get_json_field("description", domain))
+            # # insert into context_entities
+            # print(entity['id'])
+            # print(get_json_field("name", entity))
+            # print(get_json_field("description", entity))
+            # # insert into context_annotations
+            # global i
+            # print(record['id'])
+            # print(domain['id'])
+            # print(entity['id'])
 
-    cur.execute("""
-           DROP TABLE IF EXISTS links CASCADE;
-           CREATE UNLOGGED TABLE links (
-               id                  int8 PRIMARY KEY,
-               conversation_id     int8 references conversations(id),
-               url                 varchar(2048),
-               title               text,
-               description         text
-           );
-           COMMIT;
-       """)
 
-    cur.execute("""
-           DROP TABLE IF EXISTS conversation_references;
-           CREATE UNLOGGED TABLE conversation_references (
-               id                  int8 PRIMARY KEY,
-               conversation_id     int8 references conversations(id),
-               parent_id           int8 references conversations(id),
-               type                varchar(20)
-           );
-           COMMIT;
-       """)
+csv_authors = io.StringIO()
+def create_authors_csv_object(authors, cur):
+    global i
+    i += 1
+    psycopg2.extras.execute_values(cur, """
+        INSERT INTO authors VALUES %s ON CONFLICT DO NOTHING;
+            """, [(
+        author["id"],
+        get_json_field("name", author),
+        get_json_field("username", author),
+        get_json_field("description", author),
+        get_nested_json_field("public_metrics", "followers_count", author),
+        get_nested_json_field("public_metrics", "following_count", author),
+        get_nested_json_field("public_metrics", "tweet_count", author),
+        get_nested_json_field("public_metrics", "listed_count", author)
+    ) for author in authors])
 
 
 if __name__ == "__main__":
+
     conn = connect()
     cur = conn.cursor()
     create_tables(cur)
     records = []
     x = 0
     start = time.time()
-    with gzip.open('conversations.jsonl.gz', 'rt') as f:
+    with gzip.open('authors.jsonl.gz', 'rt') as f:
+        authors = []
         for line in f:
             x += 1
-            if x > 100:
-                break
-            print(x)
-            record = orjson.loads(line)
-            print(record)
+            author = orjson.loads(line)
+            author['name'] = replace_null_chars(author['name'])
+            author['username'] = replace_null_chars(author['username'])
+            author['description'] = replace_null_chars(author['description'])
+            authors.append(author)
+
+            if x % 1000000 == 0:
+                print(x)
+                create_authors_csv_object(authors, cur)
+
+            # author["username"] = author["username"][:22]
+    # with gzip.open('conversations.jsonl.gz', 'rt') as f:
+    #     for line in f:
+    #         x += 1
+    #         if x > 1000000:
+    #             break
+    #         print(x)
+    #         record = orjson.loads(line)
+    #         create_context_annotations_csv_objects(record, cur)
+    # csv_file_like_object.seek(0)
+    # cur.copy_from(csv_file_like_object, 'context_domains', sep='|')
+    # csv_file_like_object2.seek(0)
+    # cur.copy_from(csv_file_like_object2, 'context_entities', sep='|')
+    #
+    # cur.execute("COMMIT")
     end = time.time()
     print(end - start)
+
