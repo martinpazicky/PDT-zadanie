@@ -8,10 +8,10 @@ from id_generator import get_annotation_id, get_hashtag_id, get_conversation_has
     get_conversation_reference_id
 from utility import get_json_field, substring, get_nested_json_field
 
-domain_ids = set()  # there is only few unique domains, it is worth keeping ids in memory,
 
-
+# there is only few unique domains, it is worth keeping ids in memory,
 # not trying to insert and let sql handle conflicts
+domain_ids = set()
 
 
 def insert_context_annotations(context_annotations_dict, cur):
@@ -89,46 +89,35 @@ def insert_conversations(conversations, cur):
 
 
 def insert_annotations(annotations_dict, cur):
-    annotations_parsed = []
+    annotations_arr = []
     for conversation_id, annotations in annotations_dict.items():
         for annotation in annotations:
-            annotations_parsed.append({
-                                       "conversation_id": conversation_id,
-                                       "value": annotation["normalized_text"],
-                                       "type": annotation["type"],
-                                       "probability": annotation["probability"]
-                                       }
-                                      )
+            annotations_arr.append((
+                get_annotation_id(),
+                conversation_id,
+                annotation["normalized_text"],
+                annotation["type"],
+                annotation["probability"]
+            ))
     psycopg2.extras.execute_values(cur, """
         INSERT INTO annotations VALUES %s ON CONFLICT DO NOTHING;
-            """, [(
-        get_annotation_id(),
-        annotation["conversation_id"],
-        annotation["value"],
-        annotation["type"],
-        annotation["probability"]
-    ) for annotation in annotations_parsed])
+            """, annotations_arr)
 
 
 def insert_links(links_dict, cur):
     links_arr = []
     for conversation_id, urls in links_dict.items():
         for url in urls:
-            links_arr.append({"conversation_id": conversation_id,
-                              "url": get_json_field("url", url),
-                              "title": get_json_field("title", url),
-                              "description": get_json_field("description", url)
-                              }
-                             )
+            links_arr.append((
+                get_link_id(),
+                conversation_id,
+                get_json_field("url", url),
+                get_json_field("title", url),
+                get_json_field("description", url)
+            ))
     psycopg2.extras.execute_values(cur, """
         INSERT INTO links VALUES %s ON CONFLICT DO NOTHING;
-            """, [(
-        get_link_id(),
-        link["conversation_id"],
-        link["url"],
-        link["title"],
-        link["description"]
-    ) for link in links_arr])  # TODO: EXPANDED_URL?
+            """, links_arr)  # TODO: EXPANDED_URL?
 
 
 inserted_hashtags = set()
@@ -167,19 +156,15 @@ def insert_references(references_dict, existing_conversation_ids, cur):
     for conversation_id, references in references_dict.items():
         for reference in references:
             if get_json_field("id", reference) in existing_conversation_ids:
-                references_arr.append({"conversation_id": conversation_id,
-                                       "parent_id": get_json_field("id", reference),
-                                       "type": get_json_field("type", reference)
-                                       }
-                                      )
+                references_arr.append((
+                    get_conversation_reference_id(),
+                    conversation_id,
+                    get_json_field("id", reference),
+                    get_json_field("type", reference)
+                ))
     psycopg2.extras.execute_values(cur, """
         INSERT INTO conversation_references VALUES %s ON CONFLICT DO NOTHING;
-            """, [(
-        get_conversation_reference_id(),
-        reference["conversation_id"],
-        reference["parent_id"],
-        reference["type"]
-    ) for reference in references_arr])
+            """, references_arr)
 
 
 def process_authors():
@@ -196,6 +181,7 @@ if __name__ == "__main__":
     create_tables(cur)
     x = 0
     start = time.time()
+    cp0 = time.time()
     # with gzip.open('authors.jsonl.gz', 'rt') as f:
     #     authors = []
     #     for line in f:
@@ -237,7 +223,6 @@ if __name__ == "__main__":
                 references_dict[conversation["id"]] = conversation["referenced_tweets"]
 
             if x % 50000 == 0:
-                print(x)
                 insert_conversations(conversations, cur)
                 insert_annotations(annotations_dict, cur)
                 insert_context_annotations(context_annotations_dict, cur)
@@ -248,8 +233,11 @@ if __name__ == "__main__":
                 context_annotations_dict = {}
                 hashtag_dict = {}
                 conversations = []
+                print(x)
+                print(time.time() - cp0)
+                cp0 = time.time()
 
-            if x == 500000:
+            if x == 1000000:
                 break
         # call inserts one more time for remaining records
         insert_conversations(conversations, cur)
