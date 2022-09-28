@@ -26,57 +26,64 @@ def get_nested_json_field(key1, key2, record):
         if key2 in record[key1]:
             return record[key1][key2]
 
-def clean_csv_value(value: Optional[Any]) -> str:
-    if value is None:
-        return r'\N'
-    return str(value).replace('\n', '\\n')
+
+def substring(str, len):
+    if str is not None:
+        return str[:len]
+
+
+domain_ids = {''}  # there is only few unique domains, it is worth keeping ids in memory,
+                   # not trying to insert and let sql handle conflicts
+
+context_annotations_id_counter = 0
+def get_cann_id():
+    global context_annotations_id_counter
+    context_annotations_id_counter += 1
+    return context_annotations_id_counter
+
+def insert_context_annotations(context_annotations_dict, cur):
+    global domain_ids
+    domains = []
+    entities = []
+    context_annotations_parsed = []
+    for conversation_id, context_annotations in context_annotations_dict.items():
+        for cann in context_annotations:
+            if cann['domain']['id'] not in domain_ids:
+                domains.append(cann["domain"])
+                domain_ids.add(cann['domain']['id'])
+            entities.append(cann["entity"])
+            context_annotations_parsed.append({"conversation_id": conversation_id,
+                                               "domain_id": cann["domain"]["id"],
+                                               "entity_id": cann["entity"]["id"]})
+    if len(domains) > 0:
+        psycopg2.extras.execute_values(cur, """
+            INSERT INTO context_domains VALUES %s ON CONFLICT DO NOTHING;
+                    """, [(
+            domain['id'],
+            get_json_field("name", domain),
+            get_json_field("description", domain)
+        ) for domain in domains])
+
+    psycopg2.extras.execute_values(cur, """
+       INSERT INTO context_entities VALUES %s ON CONFLICT DO NOTHING;
+                 """, [(
+        entity['id'],
+        substring(get_json_field("name", entity), 255),
+        substring(get_json_field("description", entity), 255)
+    ) for entity in entities])
+
+    psycopg2.extras.execute_values(cur, """
+           INSERT INTO context_annotations VALUES %s ON CONFLICT DO NOTHING;
+                     """, [(
+        get_cann_id(),
+        cann["conversation_id"],
+        cann["domain_id"],
+        cann["entity_id"],
+    ) for cann in context_annotations_parsed])
 
 
 
-domain_ids = {''}
-entity_ids = {''}
-
-
-def create_context_annotations_csv_objects(record, cur):
-    if "context_annotations" in record:
-        for cann in record["context_annotations"]:
-            domain = get_json_field("domain", cann)
-            entity = get_json_field("entity", cann)
-            # insert into context_domains
-            global csv_file_like_object
-            if domain['id'] not in domain_ids:
-                csv_file_like_object.write('|'.join(map(clean_csv_value, (
-                    domain['id'],
-                    get_json_field("name", domain),
-                    get_json_field("description", domain)
-                ))) + '\n')
-                domain_ids.add(domain['id'])
-            # insert into context_entities
-            # if entity['id'] not in entity_ids:
-            #     csv_file_like_object2.write('|'.join(map(clean_csv_value, (
-            #         entity['id'],
-            #         get_json_field("name", entity),
-            #         get_json_field("description", entity)
-            #     ))) + '\n')
-            #     entity_ids.add(entity['id'])
-            # print(domain['id'])
-            # print(get_json_field("name", domain))
-            # print(get_json_field("description", domain))
-            # # insert into context_entities
-            # print(entity['id'])
-            # print(get_json_field("name", entity))
-            # print(get_json_field("description", entity))
-            # # insert into context_annotations
-            # global i
-            # print(record['id'])
-            # print(domain['id'])
-            # print(entity['id'])
-
-
-csv_authors = io.StringIO()
-def create_authors_csv_object(authors, cur):
-    global i
-    i += 1
+def insert_authors(authors, cur):
     psycopg2.extras.execute_values(cur, """
         INSERT INTO authors VALUES %s ON CONFLICT DO NOTHING;
             """, [(
@@ -88,7 +95,25 @@ def create_authors_csv_object(authors, cur):
         get_nested_json_field("public_metrics", "following_count", author),
         get_nested_json_field("public_metrics", "tweet_count", author),
         get_nested_json_field("public_metrics", "listed_count", author)
-    ) for author in authors], page_size=1000)
+    ) for author in authors])
+
+
+def insert_conversations(conversations, cur):
+    psycopg2.extras.execute_values(cur, """
+        INSERT INTO conversations VALUES %s ON CONFLICT DO NOTHING;
+            """, [(
+            conversation["id"],
+            91305838,   # todo: change (hold a dict with authorids)
+            get_json_field("text", conversation),
+            get_json_field("possibly_sensitive", conversation),
+            get_json_field("lang", conversation),
+            get_json_field("source", conversation),
+            get_nested_json_field("public_metrics", "retweet_count", conversation),
+            get_nested_json_field("public_metrics", "reply_count", conversation),
+            get_nested_json_field("public_metrics", "like_count", conversation),
+            get_nested_json_field("public_metrics", "quote_count", conversation),
+            get_json_field("created_at", conversation),
+        ) for conversation in conversations])
 
 
 if __name__ == "__main__":
@@ -99,24 +124,44 @@ if __name__ == "__main__":
     records = []
     x = 0
     start = time.time()
-    with gzip.open('authors.jsonl.gz', 'rt') as f:
-        authors = []
+    # with gzip.open('authors.jsonl.gz', 'rt') as f:
+    #     authors = []
+    #     for line in f:
+    #         x += 1
+    #         author = orjson.loads(line)
+    #         author['name'] = replace_null_chars(author['name'])
+    #         author['username'] = replace_null_chars(author['username'])
+    #         author['description'] = replace_null_chars(author['description'])
+    #         authors.append(author)
+    #
+    #         if x % 10000 == 0:
+    #             print(x)
+    #             insert_authors(authors, cur)
+    #             authors = []
+    #     insert_authors(authors, cur)
+
+    with gzip.open('conversations.jsonl.gz', 'rt') as f:
+        conversations = []
+        context_annotations_dict = {}
         for line in f:
             x += 1
-            author = orjson.loads(line)
-            author['name'] = replace_null_chars(author['name'])
-            author['username'] = replace_null_chars(author['username'])
-            author['description'] = replace_null_chars(author['description'])
-            authors.append(author)
+            conversation = orjson.loads(line)
+            conversations.append(conversation)
+            if "context_annotations" in conversation:
+                context_annotations_dict[conversation['id']] = conversation["context_annotations"]
 
             if x % 10000 == 0:
                 print(x)
-                create_authors_csv_object(iter(authors), cur)
+                insert_conversations(conversations, cur)
+                insert_context_annotations(context_annotations_dict, cur)
+                context_annotations_dict = {}
+                conversations = []
+            if x == 500000:
+                break
 
-                authors = []
-        create_authors_csv_object(authors, cur)
+        # insert_authors(authors, cur)
 
-            # author["username"] = author["username"][:22]
+
     # with gzip.open('conversations.jsonl.gz', 'rt') as f:
     #     for line in f:
     #         x += 1

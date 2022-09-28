@@ -17,20 +17,21 @@ def connect():
 
 
 def create_tables(cur):
-    cur.execute("""
-           DROP TABLE IF EXISTS authors CASCADE; 
-           CREATE UNLOGGED TABLE authors (
-               id                  int8 PRIMARY KEY,
-               name                varchar(255),
-               username            varchar(255),
-               description         text,
-               followers_count     int4,
-               following_count     int4,
-               tweet_count         int4,
-               listed_count        int4
-           );
-           COMMIT;
-       """)
+    # todo: uncomment
+    # cur.execute("""
+    #        DROP TABLE IF EXISTS authors CASCADE;
+    #        CREATE UNLOGGED TABLE authors (
+    #            id                  int8 PRIMARY KEY,
+    #            name                varchar(255),
+    #            username            varchar(255),
+    #            description         text,
+    #            followers_count     int4,
+    #            following_count     int4,
+    #            tweet_count         int4,
+    #            listed_count        int4
+    #        );
+    #        COMMIT;
+    #    """)
 
     cur.execute("""
            DROP TABLE IF EXISTS conversations CASCADE;
