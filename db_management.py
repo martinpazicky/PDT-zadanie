@@ -18,24 +18,24 @@ def connect():
 
 def create_tables(cur):
     # todo: uncomment
-    # cur.execute("""
-    #        DROP TABLE IF EXISTS authors CASCADE;
-    #        CREATE UNLOGGED TABLE authors (
-    #            id                  int8 PRIMARY KEY,
-    #            name                varchar(255),
-    #            username            varchar(255),
-    #            description         text,
-    #            followers_count     int4,
-    #            following_count     int4,
-    #            tweet_count         int4,
-    #            listed_count        int4
-    #        );
-    #        COMMIT;
-    #    """)
+    cur.execute("""
+           DROP TABLE IF EXISTS authors CASCADE;
+           CREATE TABLE authors (
+               id                  int8 PRIMARY KEY,
+               name                varchar(255),
+               username            varchar(255),
+               description         text,
+               followers_count     int4,
+               following_count     int4,
+               tweet_count         int4,
+               listed_count        int4
+           );
+           COMMIT;
+       """)
 
     cur.execute("""
            DROP TABLE IF EXISTS conversations CASCADE;
-           CREATE UNLOGGED TABLE conversations (
+           CREATE  TABLE conversations (
                id                  int8 PRIMARY KEY UNIQUE, 
                author_id           int8 references authors(id),
                content             text,
@@ -53,7 +53,7 @@ def create_tables(cur):
 
     cur.execute("""
            DROP TABLE IF EXISTS hashtags CASCADE;
-           CREATE UNLOGGED TABLE hashtags (
+           CREATE  TABLE hashtags (
                id                  int8 PRIMARY KEY,
                tag                 text UNIQUE
            );
@@ -62,7 +62,7 @@ def create_tables(cur):
 
     cur.execute("""
            DROP TABLE IF EXISTS conversation_hashtags;
-           CREATE UNLOGGED TABLE conversation_hashtags (
+           CREATE  TABLE conversation_hashtags (
                id                  int8 PRIMARY KEY,
                conversation_id     int8 references conversations(id),
                hashtag_id          int8 references hashtags(id)
@@ -72,7 +72,7 @@ def create_tables(cur):
 
     cur.execute("""
            DROP TABLE IF EXISTS context_domains CASCADE;
-           CREATE UNLOGGED TABLE context_domains (
+           CREATE  TABLE context_domains (
                id                  int8 PRIMARY KEY,
                name                varchar(255),
                description         varchar(255)
@@ -82,7 +82,7 @@ def create_tables(cur):
 
     cur.execute("""
            DROP TABLE IF EXISTS context_entities CASCADE;
-           CREATE UNLOGGED TABLE context_entities (
+           CREATE  TABLE context_entities (
                id                  int8 PRIMARY KEY,
                name                varchar(255),
                description         varchar(255)
@@ -92,7 +92,7 @@ def create_tables(cur):
 
     cur.execute("""
            DROP TABLE IF EXISTS context_annotations;
-           CREATE UNLOGGED TABLE context_annotations (
+           CREATE  TABLE context_annotations (
                id                  int8 PRIMARY KEY,
                conversation_id     int8 references conversations(id),
                context_domains_id  int8 references context_domains(id),
@@ -103,7 +103,7 @@ def create_tables(cur):
 
     cur.execute("""
            DROP TABLE IF EXISTS annotations CASCADE;
-           CREATE UNLOGGED TABLE annotations (
+           CREATE  TABLE annotations (
                id                  int8 PRIMARY KEY,
                conversation_id     int8 references conversations(id),
                value               text,
@@ -115,7 +115,7 @@ def create_tables(cur):
 
     cur.execute("""
            DROP TABLE IF EXISTS links CASCADE;
-           CREATE UNLOGGED TABLE links (
+           CREATE  TABLE links (
                id                  int8 PRIMARY KEY,
                conversation_id     int8 references conversations(id),
                url                 varchar(2048),
@@ -127,7 +127,7 @@ def create_tables(cur):
 
     cur.execute("""
            DROP TABLE IF EXISTS conversation_references;
-           CREATE UNLOGGED TABLE conversation_references (
+           CREATE  TABLE conversation_references (
                id                  int8 PRIMARY KEY,
                conversation_id     int8 references conversations(id),
                parent_id           int8 references conversations(id),

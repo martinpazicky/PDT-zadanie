@@ -6,8 +6,7 @@ import psycopg2.extras
 from db_management import connect, create_tables
 from id_generator import get_annotation_id, get_hashtag_id, get_conversation_hashtag_id, get_link_id, get_cann_id, \
     get_conversation_reference_id
-from utility import get_json_field, substring, get_nested_json_field
-
+from utility import get_json_field, substring, get_nested_json_field, replace_null_chars, chunks
 
 # there is only few unique domains, it is worth keeping ids in memory,
 # not trying to insert and let sql handle conflicts
@@ -55,6 +54,9 @@ def insert_context_annotations(context_annotations_dict, cur):
     ) for cann in context_annotations_parsed])
 
 
+inserted_authors = set()
+
+
 def insert_authors(authors, cur):
     psycopg2.extras.execute_values(cur, """
         INSERT INTO authors VALUES %s ON CONFLICT DO NOTHING;
@@ -75,7 +77,7 @@ def insert_conversations(conversations, cur):
         INSERT INTO conversations VALUES %s ON CONFLICT DO NOTHING;
             """, [(
         conversation["id"],
-        91305838,  # todo: change (hold a dict with authorids)
+        conversation["author_id"] if conversation["author_id"] in inserted_authors else None,
         get_json_field("text", conversation),
         get_json_field("possibly_sensitive", conversation),
         get_json_field("lang", conversation),
@@ -151,8 +153,13 @@ def insert_hashtags(hashtags_dict, cur):
     ) for hashtag in hashtags_arr])
 
 
+references_dict_end = {}
+
+
 def insert_references(references_dict, existing_conversation_ids, cur):
+    global references_dict_end
     references_arr = []
+
     for conversation_id, references in references_dict.items():
         for reference in references:
             if get_json_field("id", reference) in existing_conversation_ids:
@@ -162,6 +169,8 @@ def insert_references(references_dict, existing_conversation_ids, cur):
                     get_json_field("id", reference),
                     get_json_field("type", reference)
                 ))
+            else:
+                references_dict_end[conversation_id] = references
     psycopg2.extras.execute_values(cur, """
         INSERT INTO conversation_references VALUES %s ON CONFLICT DO NOTHING;
             """, references_arr)
@@ -177,26 +186,33 @@ def process_conversations():
 
 if __name__ == "__main__":
     conn = connect()
+    conn.autocommit = True
     cur = conn.cursor()
     create_tables(cur)
     x = 0
     start = time.time()
     cp0 = time.time()
-    # with gzip.open('authors.jsonl.gz', 'rt') as f:
-    #     authors = []
-    #     for line in f:
-    #         x += 1
-    #         author = orjson.loads(line)
-    #         author['name'] = replace_null_chars(author['name'])
-    #         author['username'] = replace_null_chars(author['username'])
-    #         author['description'] = replace_null_chars(author['description'])
-    #         authors.append(author)
-    #
-    #         if x % 10000 == 0:
-    #             print(x)
-    #             insert_authors(authors, cur)
-    #             authors = []
-    #     insert_authors(authors, cur)
+    with gzip.open('authors.jsonl.gz', 'rt') as f:
+        authors = []
+        for line in f:
+            x += 1
+            author = orjson.loads(line)
+            author['name'] = replace_null_chars(author['name'])
+            author['username'] = replace_null_chars(author['username'])
+            author['description'] = replace_null_chars(author['description'])
+            authors.append(author)
+            inserted_authors.add(author["id"])
+
+            if x % 10000 == 0:
+                insert_authors(authors, cur)
+                authors = []
+                print(x)
+                print(time.time() - cp0)
+                cp0 = time.time()
+        # insert remaining authors
+        insert_authors(authors, cur)
+
+    x = 0
     existing_conversation_ids = set()
     with gzip.open('conversations.jsonl.gz', 'rt') as f:
         conversations = []
@@ -222,30 +238,34 @@ if __name__ == "__main__":
             if "referenced_tweets" in conversation:
                 references_dict[conversation["id"]] = conversation["referenced_tweets"]
 
-            if x % 50000 == 0:
+            if x % 10000 == 0:
                 insert_conversations(conversations, cur)
                 insert_annotations(annotations_dict, cur)
                 insert_context_annotations(context_annotations_dict, cur)
                 insert_links(links_dict, cur)
                 insert_hashtags(hashtag_dict, cur)
+                insert_references(references_dict, existing_conversation_ids, cur)
                 annotations_dict = {}
                 links_dict = {}
                 context_annotations_dict = {}
                 hashtag_dict = {}
+                references_dict = {}
                 conversations = []
                 print(x)
                 print(time.time() - cp0)
                 cp0 = time.time()
 
-            if x == 1000000:
-                break
+            # if x == 100000:
+            #     break
         # call inserts one more time for remaining records
         insert_conversations(conversations, cur)
         insert_annotations(annotations_dict, cur)
         insert_context_annotations(context_annotations_dict, cur)
         insert_links(links_dict, cur)
         insert_hashtags(hashtag_dict, cur)
-        insert_references(references_dict, existing_conversation_ids, cur)  # TODO: uncomment
+        # references are inserted after all conversations
+        for references_chunk in chunks(references_dict_end):
+            insert_references(references_chunk, existing_conversation_ids, cur)
 
     end = time.time()
     print(end - start)
